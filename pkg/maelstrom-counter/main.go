@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
@@ -9,21 +10,34 @@ import (
 
 func main() {
 	n := maelstrom.NewNode()
+	kv := maelstrom.NewSeqKV(n)
+	svc := NewCounterService(kv)
 
-	n.Handle("echo", func(msg maelstrom.Message) error {
-		// Unmarshal the message body as an loosely-typed map.
-		var body map[string]any
-		if err := json.Unmarshal(msg.Body, &body); err != nil {
-			return err
-		}
+	n.Handle("init", func(msg maelstrom.Message) error {
+		svc.InitialiseCluster(n.NodeIDs(), n.ID())
 
-		// Update the message type to return back.
-		body["type"] = "echo_ok"
-
-		// Echo the original message back with the updated message type.
-		return n.Reply(msg, body)
+		return nil
 	})
 
+	n.Handle("add", func(msg maelstrom.Message) error {
+		var req AddRequest
+		if err := json.Unmarshal(msg.Body, &req); err != nil {
+			return fmt.Errorf("unmarshaling add request: %w", err)
+		}
+
+		svc.IncreaseLocalNodeCounter(req.Delta)
+
+		return n.Reply(msg, cachedAddResponse)
+	})
+
+	n.Handle("read", func(msg maelstrom.Message) error {
+		return n.Reply(msg, &ReadResponse{
+			Type:  "read_ok",
+			Value: svc.DistributedCounter(),
+		})
+	})
+
+	svc.Start()
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
 	}

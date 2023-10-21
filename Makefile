@@ -28,7 +28,9 @@ broadcast-efficient:
 	cd ./pkg/maelstrom-broadcast && go install .
 	./maelstrom/maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 25 --time-limit 20 --rate 100 --latency 100
 
-.PHONY: broadcast-efficient-with-partition
-broadcast-efficient-with-partition:
-	cd ./pkg/maelstrom-broadcast && go install .
-	./maelstrom/maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 25 --time-limit 20 --rate 100 --latency 100 --nemesis partition
+.PHONY: counter
+counter:
+	cd ./pkg/maelstrom-counter && go install .
+	./maelstrom/maelstrom test -w g-counter --bin ~/go/bin/maelstrom-counter --node-count 3 --rate 100 --time-limit 20 --nemesis partition
+
+
