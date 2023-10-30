@@ -12,9 +12,9 @@ import (
 func main() {
 	n := maelstrom.NewNode()
 
-	partitionsLock := sync.RWMutex{}
+	logsLock := sync.RWMutex{}
 	offsetsLock := sync.RWMutex{}
-	partitions := make(map[string][]int)
+	logs := make(map[string][]int)
 	offsets := make(map[string]int)
 
 	n.Handle("send", func(msg maelstrom.Message) error {
@@ -23,15 +23,14 @@ func main() {
 			return fmt.Errorf("unmarshaling send request: %w", err)
 		}
 
-		partitionsLock.Lock()
-		defer partitionsLock.Unlock()
+		logsLock.Lock()
+		defer logsLock.Unlock()
 
-		p, _ := partitions[req.Key]
-		p = append(p, req.Msg)
-		partitions[req.Key] = p
+		l := append(logs[req.Key], req.Msg)
+		logs[req.Key] = l
 
 		return n.Reply(msg, &SendResponse{
-			Offset: len(p) - 1,
+			Offset: len(l) - 1,
 			Type:   "send_ok",
 		})
 	})
@@ -43,18 +42,18 @@ func main() {
 		}
 
 		msgs := make(map[string][][2]int)
-		partitionsLock.Lock()
-		defer partitionsLock.Unlock()
+		logsLock.RLock()
+		defer logsLock.RUnlock()
 
 		for id, fromOffset := range req.Offsets {
-			p, ok := partitions[id]
+			l, ok := logs[id]
 			if !ok {
 				continue
 			}
 
 			var offsetsWithMessages [][2]int
-			for offset, message := range p[fromOffset:] {
-				offsetsWithMessages = append(offsetsWithMessages, [2]int{offset, message})
+			for i, message := range l[fromOffset:] {
+				offsetsWithMessages = append(offsetsWithMessages, [2]int{i + fromOffset, message})
 			}
 			if len(offsetsWithMessages) == 0 {
 				continue
@@ -79,15 +78,6 @@ func main() {
 		defer offsetsLock.Unlock()
 
 		for ID, newOffset := range req.Offsets {
-			currentOffset, ok := offsets[ID]
-			if !ok {
-				continue
-			}
-
-			if newOffset < currentOffset {
-				continue
-			}
-
 			offsets[ID] = newOffset
 		}
 
@@ -105,11 +95,7 @@ func main() {
 		defer offsetsLock.RUnlock()
 
 		for _, key := range req.Keys {
-			o, ok := offsets[key]
-			if !ok {
-				continue
-			}
-			resp[key] = o
+			resp[key] = offsets[key]
 		}
 
 		return n.Reply(msg, &ListCommittedOffsetsResponse{
