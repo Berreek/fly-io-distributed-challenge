@@ -33,4 +33,9 @@ counter:
 	cd ./pkg/maelstrom-counter && go install .
 	./maelstrom/maelstrom test -w g-counter --bin ~/go/bin/maelstrom-counter --node-count 3 --rate 100 --time-limit 20 --nemesis partition
 
+.PHONY: kafka
+kafka:
+	cd ./pkg/maelstrom-kafka-style-log && go install .
+	./maelstrom/maelstrom test -w kafka --bin ~/go/bin/maelstrom-kafka-style-log --node-count 1 --concurrency 2n --time-limit 20 --rate 1000
+
 
