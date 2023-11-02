@@ -5,6 +5,18 @@ type SendRequest struct {
 	Key string `json:"key"`
 }
 
+type SendLeaderRequest struct {
+	Type string `json:"type"`
+	Msg  int    `json:"msg"`
+	Key  string `json:"key"`
+}
+
+type CommitOffsetLeaderRequest struct {
+	Type   string `json:"type"`
+	Offset int    `json:"offset"`
+	Key    string `json:"key"`
+}
+
 type SendResponse struct {
 	Offset int    `json:"offset"`
 	Type   string `json:"type"`
@@ -38,5 +50,8 @@ type Messages map[string][][2]int
 var (
 	cachedCommitOffsetsResponse = map[string]string{
 		"type": "commit_offsets_ok",
+	}
+	cachedCommitOffsetsLeaderResponse = map[string]string{
+		"type": "leader_commit_offsets_ok",
 	}
 )

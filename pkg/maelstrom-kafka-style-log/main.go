@@ -1,9 +1,7 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -11,9 +9,34 @@ import (
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
 )
 
+var defaultTimeout = 2 * time.Second
+
 func main() {
-	n := maelstrom.NewNode()
-	kv := maelstrom.NewLinKV(n)
+
+	svc := NewLogsService()
+	n := svc.Node()
+
+	n.Handle("init", func(msg maelstrom.Message) error {
+		svc.InitialiseCluster()
+		return nil
+	})
+
+	n.Handle("leader_send", func(msg maelstrom.Message) error {
+		var req *SendRequest
+		if err := json.Unmarshal(msg.Body, &req); err != nil {
+			return fmt.Errorf("unmarshaling send request: %w", err)
+		}
+
+		offset, err := svc.SaveLogAsTheLeader(req)
+		if err != nil {
+			return fmt.Errorf("saving log as the leader: %w", err)
+		}
+
+		return n.Reply(msg, &SendResponse{
+			Offset: offset,
+			Type:   "leader_send_ok",
+		})
+	})
 
 	n.Handle("send", func(msg maelstrom.Message) error {
 		var req *SendRequest
@@ -21,18 +44,13 @@ func main() {
 			return fmt.Errorf("unmarshaling send request: %w", err)
 		}
 
-		log, err := fetchLog(kv, req.Key)
+		offset, err := svc.SaveLog(req)
 		if err != nil {
-			return fmt.Errorf("fetching log: %w", err)
-		}
-
-		updated, err := appendDataAndSaveLog(kv, log, req)
-		if err != nil {
-			return fmt.Errorf("updating log: %w", err)
+			return fmt.Errorf("saving log: %w", err)
 		}
 
 		return n.Reply(msg, &SendResponse{
-			Offset: len(updated) - 1,
+			Offset: offset,
 			Type:   "send_ok",
 		})
 	})
@@ -43,23 +61,9 @@ func main() {
 			return fmt.Errorf("unmarshaling poll request: %w", err)
 		}
 
-		msgs := make(map[string][][2]int)
-
-		for id, fromOffset := range req.Offsets {
-			l, err := fetchLog(kv, id)
-			if err != nil {
-				return fmt.Errorf("fetching log with id %s : %w", id, err)
-			}
-
-			var offsetsWithMessages [][2]int
-			for i, message := range l[fromOffset:] {
-				offsetsWithMessages = append(offsetsWithMessages, [2]int{i + fromOffset, message})
-			}
-			if len(offsetsWithMessages) == 0 {
-				continue
-			}
-
-			msgs[id] = offsetsWithMessages
+		msgs, err := svc.PollOffsets(req)
+		if err != nil {
+			return fmt.Errorf("polling offsets: %w", err)
 		}
 
 		return n.Reply(msg, &PollResponse{
@@ -68,25 +72,27 @@ func main() {
 		})
 	})
 
+	n.Handle("leader_commit_offsets", func(msg maelstrom.Message) error {
+		var req *CommitOffsetLeaderRequest
+		if err := json.Unmarshal(msg.Body, &req); err != nil {
+			return fmt.Errorf("unmarshaling commit offset leader request: %w", err)
+		}
+
+		if err := svc.CommitOffsetAsLeader(req); err != nil {
+			return fmt.Errorf("commiting offset as leader: %w", err)
+		}
+
+		return n.Reply(msg, cachedCommitOffsetsLeaderResponse)
+	})
+
 	n.Handle("commit_offsets", func(msg maelstrom.Message) error {
 		var req *CommitOffsetsRequest
 		if err := json.Unmarshal(msg.Body, &req); err != nil {
 			return fmt.Errorf("unmarshaling commit offsets request: %w", err)
 		}
 
-		for ID, newOffset := range req.Offsets {
-			offset, err := fetchOffset(kv, ID)
-			if err != nil {
-				return fmt.Errorf("fetching offset: %w", err)
-			}
-
-			if newOffset < offset {
-				continue
-			}
-
-			if err = saveOffset(kv, ID, offset, newOffset); err != nil {
-				return fmt.Errorf("saving offset: %w", err)
-			}
+		if err := svc.CommitOffsets(req); err != nil {
+			return fmt.Errorf("committing offsets: %w", err)
 		}
 
 		return n.Reply(msg, cachedCommitOffsetsResponse)
@@ -98,18 +104,13 @@ func main() {
 			return fmt.Errorf("unmarshaling list committed offsets request: %w", err)
 		}
 
-		resp := make(map[string]int)
-
-		for _, key := range req.Keys {
-			offset, err := fetchOffset(kv, key)
-			if err != nil {
-				return fmt.Errorf("fetching offset for ID %s : %w", key, err)
-			}
-			resp[key] = offset
+		offsets, err := svc.ListCommittedOffsets(req)
+		if err != nil {
+			return fmt.Errorf("list committed offsets: %w", err)
 		}
 
 		return n.Reply(msg, &ListCommittedOffsetsResponse{
-			Offsets: resp,
+			Offsets: offsets,
 			Type:    "list_committed_offsets_ok",
 		})
 	})
@@ -117,62 +118,4 @@ func main() {
 	if err := n.Run(); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func fetchLog(kv *maelstrom.KV, ID string) ([]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	var data []int
-	err := kv.ReadInto(ctx, fmt.Sprintf("logs-%s", ID), &data)
-	var rpcError *maelstrom.RPCError
-	if errors.As(err, &rpcError) && rpcError.Code == maelstrom.KeyDoesNotExist {
-		return data, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("fetching log from kv: %w", err)
-	}
-
-	return data, nil
-}
-
-func fetchOffset(kv *maelstrom.KV, ID string) (int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	offset, err := kv.ReadInt(ctx, fmt.Sprintf("offsets-%s", ID))
-	var rpcError *maelstrom.RPCError
-	if errors.As(err, &rpcError) && rpcError.Code == maelstrom.KeyDoesNotExist {
-		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("fetching log from kv: %w", err)
-	}
-
-	return offset, nil
-}
-
-func appendDataAndSaveLog(kv *maelstrom.KV, log []int, req *SendRequest) ([]int, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	updated := append(log, req.Msg)
-	err := kv.CompareAndSwap(ctx, fmt.Sprintf("logs-%s", req.Key), log, updated, true)
-	if err != nil {
-		return nil, fmt.Errorf("compare and swapping: %w", err)
-	}
-
-	return updated, nil
-}
-
-func saveOffset(kv *maelstrom.KV, ID string, currentOffset, newOffset int) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	err := kv.CompareAndSwap(ctx, fmt.Sprintf("offsets-%s", ID), currentOffset, newOffset, true)
-	if err != nil {
-		return fmt.Errorf("compare and swapping: %w", err)
-	}
-
-	return nil
 }
