@@ -37,3 +37,8 @@ counter:
 kafka:
 	cd ./pkg/maelstrom-kafka-style-log && go install .
 	./maelstrom/maelstrom test -w kafka --bin ~/go/bin/maelstrom-kafka-style-log --node-count 2 --concurrency 2n --time-limit 20 --rate 1000
+
+.PHONY: totally-available
+totally-available:
+	cd ./pkg/maelstrom-totally-available && go install .
+	./maelstrom/maelstrom test -w txn-rw-register --bin ~/go/bin/maelstrom-totally-available --node-count 1 --time-limit 20 --rate 1000 --concurrency 2n --consistency-models read-uncommitted --availability total
