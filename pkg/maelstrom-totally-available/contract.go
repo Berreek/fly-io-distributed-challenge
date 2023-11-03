@@ -9,4 +9,5 @@ type CommitTransactionsResponse struct {
 	Txn  Transactions `json:"txn"`
 }
 
-type Transactions [][3]interface{}
+type Transaction [3]interface{}
+type Transactions []Transaction

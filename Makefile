@@ -41,4 +41,4 @@ kafka:
 .PHONY: totally-available
 totally-available:
 	cd ./pkg/maelstrom-totally-available && go install .
-	./maelstrom/maelstrom test -w txn-rw-register --bin ~/go/bin/maelstrom-totally-available --node-count 1 --time-limit 20 --rate 1000 --concurrency 2n --consistency-models read-uncommitted --availability total
+	./maelstrom/maelstrom test -w txn-rw-register --bin ~/go/bin/maelstrom-totally-available --node-count 2 --concurrency 2n --time-limit 20 --rate 1000 --consistency-models read-committed --availability total --nemesis partition
